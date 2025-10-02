@@ -58,6 +58,16 @@ export class ApiClient {
     return this.request('post', '/bot/messages', payload);
   }
 
+  async recordCampaignReply(payload: {
+    phone: string;
+    messageId: string;
+    message: string;
+    campaignId?: string;
+    timestamp?: number;
+  }): Promise<AxiosResponse | null> {
+    return this.request('post', '/bot/campaigns/reply', payload);
+  }
+
   private async request(
     method: AxiosRequestConfig['method'],
     url: string,

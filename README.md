@@ -14,6 +14,10 @@ services/
 scripts/         # Utiliti pembangunan
 ```
 
+## Dokumentasi Lengkap
+
+Panduan operasi terperinci (setup, tiket, POS, MyInvois, kempen, sandaran, FAQ) disediakan di folder [`docs/`](docs/README.md). Mulakan dengan bahagian [Setup](docs/setup.md) untuk menyiapkan persekitaran dan pairing bot WhatsApp.
+
 ## Persediaan
 
 1. Salin `.env.example` kepada `.env` dan kemaskini nilai rahsia:
@@ -86,6 +90,7 @@ Perkhidmatan penting:
   - **Nota / Gambar** → `POST /api/repairs/:id/note` (jenis NOTE/PHOTO)
   - **Tanda Siap** → `POST /api/tickets/:id/ready`
 - Seretan ke kolum baharu akan memanggil API berkaitan dan segar semula papan secara automatik.
+- Rujuk [docs/tickets.md](docs/tickets.md) untuk aliran penuh `NEW → IN_PROGRESS → READY → PICKED_UP`, hook WhatsApp, dan follow-up automatik.
 
 ### Login Bot WhatsApp
 
@@ -93,6 +98,7 @@ Perkhidmatan penting:
 2. Gunakan aplikasi WhatsApp → Peranti Terpaut → Pautkan Peranti → Masukkan kod / imbas QR.
 3. Sesi akan disimpan dalam volume `wa_bot_session` supaya kekal selepas restart.
 4. Konfigurasi pembolehubah `WA_API_EMAIL` dan `WA_API_PASSWORD` untuk akaun servis (peranan `admin`/`tech`) serta `WA_API_BASE_URL` jika API berada pada host lain. Bot akan login ke API, log mesej ke `audit_logs`, memproses intent `status`, `harga`, `janji temu`, `invois`, dan mencipta tiket intake apabila pautan borang dikongsi. Hantar `!takeover` dalam chat untuk hentikan balasan automatik sementara waktu.
+5. Jika perlu reset atau ulang pairing, rujuk panduan [docs/setup.md#pairing-bot-whatsapp-baileys](docs/setup.md#pairing-bot-whatsapp-baileys) sebelum memadam volume `wa_bot_session`.
 
 ## Mod Produksi
 
@@ -132,4 +138,5 @@ Setiap servis mempunyai healthcheck; `docker compose ps` akan memaparkan status.
 
 - Folder `scripts/` menyediakan helper asas.
 - Servis `scheduler` dan `worker` memerlukan Redis tersedia (`redis://redis:6379`).
-- Tukar `MYINVOIS_MODE` kepada `portal` atau `api` mengikut integrasi sebenar.
+- Untuk maklumat modul POS, kampen opt-in, dan FAQ penyelenggaraan, rujuk direktori [`docs/`](docs/README.md).
+- Tukar `MYINVOIS_MODE` kepada `portal` atau `api` mengikut integrasi sebenar (rujuk [docs/myinvois.md](docs/myinvois.md) untuk langkah eksport dan integrasi API).

@@ -10,6 +10,7 @@
     "healthcheck": "node dist/healthcheck.js"
   },
   "dependencies": {
+    "dotenv": "^16.4.5",
     "node-cron": "^3.0.3",
     "pino": "^8.19.0"
   },

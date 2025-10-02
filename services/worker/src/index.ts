@@ -1,8 +1,8 @@
 import { Worker, Queue, QueueEvents } from 'bullmq';
 import IORedis from 'ioredis';
-import pino from 'pino';
+import { createLogger } from './logger.js';
 
-const logger = pino({ level: process.env.LOG_LEVEL ?? 'info' });
+const logger = createLogger('worker');
 const connection = new IORedis(process.env.REDIS_URL ?? 'redis://redis:6379');
 const queueName = process.env.WORKER_QUEUE ?? 'wa-pos-jobs';
 

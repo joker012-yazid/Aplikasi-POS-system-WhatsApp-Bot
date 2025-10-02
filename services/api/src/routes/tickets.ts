@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { authorize, getAuthenticatedUser, requireAuth } from '../middleware/auth.js';
 import { validateBody } from '../middleware/validate.js';
 import { prisma } from '../lib/prisma.js';
+import { triggerTicketAcknowledgement, triggerTicketEstimateRequest, triggerTicketPickupThankYou, triggerTicketReadyNotification } from '../services/ticket-hooks.js';
 import { asyncHandler } from '../utils/async-handler.js';
 import { AppError } from '../utils/app-error.js';
 
@@ -167,6 +168,11 @@ router.post(
     });
 
     res.status(201).json({ data: ticket });
+
+    triggerTicketAcknowledgement(ticket.id).catch((error) => {
+      // eslint-disable-next-line no-console
+      console.error('Failed to trigger WhatsApp acknowledgement', error);
+    });
   }),
 );
 
@@ -219,6 +225,11 @@ router.patch(
     });
 
     res.json({ data: result });
+
+    triggerTicketEstimateRequest(id).catch((error) => {
+      // eslint-disable-next-line no-console
+      console.error('Failed to trigger WhatsApp estimate request', error);
+    });
   }),
 );
 
@@ -266,6 +277,56 @@ router.post(
     });
 
     res.json({ data: result });
+
+    triggerTicketReadyNotification(id, payload.photos ?? []).catch((error) => {
+      // eslint-disable-next-line no-console
+      console.error('Failed to trigger WhatsApp ready notification', error);
+    });
+  }),
+);
+
+router.post(
+  '/:id/pickup',
+  requireAuth,
+  authorize(['admin', 'tech']),
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+
+    const existing = await prisma.workTicket.findFirst({
+      where: { id, deleted_at: null },
+    });
+
+    if (!existing) {
+      throw new AppError(404, 'Ticket not found');
+    }
+
+    const user = getAuthenticatedUser(req);
+
+    const result = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+      const updated = await tx.workTicket.update({
+        where: { id },
+        data: { status: WorkTicketStatus.CLOSED },
+        include: { customer: true, device: true },
+      });
+
+      await tx.workTicketEvent.create({
+        data: {
+          ticket_id: id,
+          type: WorkTicketEventType.PICKED_UP,
+          payload: { previous: existing.status },
+          author_id: user?.id,
+        },
+      });
+
+      return updated;
+    });
+
+    res.json({ data: result });
+
+    triggerTicketPickupThankYou(id).catch((error) => {
+      // eslint-disable-next-line no-console
+      console.error('Failed to trigger WhatsApp pickup thank you', error);
+    });
   }),
 );
 

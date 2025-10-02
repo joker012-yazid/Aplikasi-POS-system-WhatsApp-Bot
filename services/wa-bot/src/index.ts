@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { IncomingMessage, ServerResponse } from 'node:http';
 
 import makeWASocket, {
   Browsers,
@@ -7,16 +8,34 @@ import makeWASocket, {
   WASocket,
   useMultiFileAuthState,
 } from '@adiwajshing/baileys';
-import pino from 'pino';
+import { createLogger } from './logger.js';
 
 import { ApiClient } from './api-client.js';
 import { apiBaseUrl, apiEmail, apiPassword, deviceLabel, fallbackMessage, httpPort } from './config.js';
 import { getMessageText, parseIntent } from './intents.js';
 
-const logger = pino({ level: process.env.LOG_LEVEL ?? 'info' });
+const logger = createLogger('wa-bot');
 const apiClient = new ApiClient({ baseURL: apiBaseUrl, email: apiEmail, password: apiPassword, logger });
 
 const takeoverSessions = new Set<string>();
+
+const STOP_CONFIRMATION =
+  'Baik, kami telah menghentikan mesej promosi untuk nombor ini. Balas START jika ingin melanggannya semula.';
+
+const extractPhoneFromJid = (jid: string | undefined | null): string | null => {
+  if (!jid) {
+    return null;
+  }
+
+  const atIndex = jid.indexOf('@');
+  const bare = atIndex >= 0 ? jid.slice(0, atIndex) : jid;
+  const digits = bare.replace(/[^0-9+]/g, '');
+  if (!digits) {
+    return null;
+  }
+
+  return digits.startsWith('+') ? digits : `+${digits}`;
+};
 
 type TicketStatus = 'NEW' | 'IN_PROGRESS' | 'READY' | 'CLOSED';
 
@@ -69,22 +88,170 @@ const parseDate = (value: string | null | undefined): Date | null => {
   return Number.isNaN(date.getTime()) ? null : date;
 };
 
-const createHttpServer = () => {
-  const server = http.createServer((_req, res) => {
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(
-      JSON.stringify({
-        status: 'ok',
-        service: 'wa-bot',
-        deviceLabel,
-        takeoverSessions: takeoverSessions.size,
-        apiConfigured: apiClient.isConfigured,
-      }),
-    );
+interface SendAttachment {
+  type: 'image';
+  url: string;
+  caption?: string | null;
+}
+
+interface SendRequestPayload {
+  to: string;
+  text?: string;
+  attachments?: SendAttachment[];
+  tag?: string;
+}
+
+const parseBody = async (req: IncomingMessage): Promise<unknown> => {
+  const chunks: Buffer[] = [];
+  const maxSize = 512 * 1024; // 512KB payload limit
+
+  for await (const chunk of req) {
+    if (typeof chunk === 'string') {
+      chunks.push(Buffer.from(chunk));
+    } else {
+      chunks.push(chunk);
+    }
+
+    const total = chunks.reduce((size, current) => size + current.length, 0);
+    if (total > maxSize) {
+      throw new Error('Payload too large');
+    }
+  }
+
+  if (!chunks.length) {
+    return null;
+  }
+
+  const buffer = Buffer.concat(chunks);
+  const body = buffer.toString('utf8');
+  try {
+    return JSON.parse(body);
+  } catch (error) {
+    logger.warn({ body }, 'failed to parse JSON body');
+    throw new Error('Invalid JSON payload');
+  }
+};
+
+const normaliseRecipient = (value: string): string | null => {
+  const digits = value.replace(/[^0-9+]/g, '');
+  if (!digits) {
+    return null;
+  }
+
+  const prefixed = digits.startsWith('+') ? digits : `+${digits}`;
+  const number = prefixed.replace(/\+/g, '');
+  if (!number) {
+    return null;
+  }
+
+  return `${number}@s.whatsapp.net`;
+};
+
+const createHttpServer = (getSocket: () => WASocket | null) => {
+  const server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    const method = req.method ?? 'GET';
+    const url = req.url ?? '/';
+
+    if (method === 'GET' && (url === '/healthz' || url === '/')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          status: 'ok',
+          service: 'wa-bot',
+          deviceLabel,
+          takeoverSessions: takeoverSessions.size,
+          apiConfigured: apiClient.isConfigured,
+        }),
+      );
+      return;
+    }
+
+    if (method === 'POST' && url === '/send') {
+      let payload: SendRequestPayload | null = null;
+      try {
+        const parsed = await parseBody(req);
+        payload = (parsed as SendRequestPayload | null) ?? null;
+      } catch (error) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ status: 'error', message: (error as Error).message }));
+        return;
+      }
+
+      if (!payload || typeof payload !== 'object') {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ status: 'error', message: 'Payload diperlukan' }));
+        return;
+      }
+
+      const recipient = normaliseRecipient(payload.to);
+      if (!recipient) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ status: 'error', message: 'Nombor WhatsApp tidak sah' }));
+        return;
+      }
+
+      const socket = getSocket();
+      if (!socket) {
+        res.writeHead(503, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ status: 'error', message: 'Socket belum bersedia' }));
+        return;
+      }
+
+      const text = typeof payload.text === 'string' ? payload.text.trim() : '';
+      const attachments = Array.isArray(payload.attachments) ? payload.attachments : [];
+
+      const results: { type: 'text' | 'attachment'; status: 'sent' | 'skipped' | 'failed'; detail?: string | null }[] = [];
+
+      if (text) {
+        try {
+          await socket.sendMessage(recipient, { text });
+          results.push({ type: 'text', status: 'sent' });
+        } catch (error) {
+          logger.error({ err: error, recipient }, 'failed to send text message');
+          results.push({ type: 'text', status: 'failed', detail: (error as Error).message });
+        }
+      } else {
+        results.push({ type: 'text', status: 'skipped', detail: 'tiada mesej teks' });
+      }
+
+      for (const attachment of attachments) {
+        if (!attachment || attachment.type !== 'image' || !attachment.url) {
+          results.push({ type: 'attachment', status: 'skipped', detail: 'format lampiran tidak sah' });
+          continue;
+        }
+
+        try {
+          await socket.sendMessage(recipient, {
+            image: { url: attachment.url },
+            caption: attachment.caption ?? undefined,
+          });
+          results.push({ type: 'attachment', status: 'sent' });
+        } catch (error) {
+          logger.error({ err: error, recipient, attachment }, 'failed to send attachment');
+          results.push({ type: 'attachment', status: 'failed', detail: (error as Error).message });
+        }
+      }
+
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          status: 'ok',
+          to: recipient,
+          tag: payload.tag ?? null,
+          results,
+        }),
+      );
+      return;
+    }
+
+    res.writeHead(404, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ status: 'error', message: 'Not found' }));
   });
+
   server.listen(httpPort, () => {
-    logger.info({ port: httpPort }, 'HTTP status server listening');
+    logger.info({ port: httpPort }, 'HTTP control server listening');
   });
+
   return server;
 };
 
@@ -268,9 +435,34 @@ const handleIntent = async (sock: WASocket, message: WAMessage) => {
   }
 
   const trimmed = text.trim();
+  const lower = trimmed.toLowerCase();
   const remoteJid = message.key.remoteJid ?? 'unknown';
 
-  if (trimmed.toLowerCase() === '!takeover') {
+  const phoneForCampaign = extractPhoneFromJid(remoteJid);
+  if (phoneForCampaign && apiClient.isConfigured) {
+    try {
+      await apiClient.recordCampaignReply({
+        phone: phoneForCampaign,
+        messageId: message.key.id ?? 'unknown',
+        message: trimmed,
+        timestamp: message.messageTimestamp ? Number(message.messageTimestamp) * 1000 : Date.now(),
+      });
+    } catch (error) {
+      logger.warn({ err: error }, 'failed to record campaign reply');
+    }
+  }
+
+  if (lower === 'stop') {
+    try {
+      await sock.sendMessage(remoteJid, { text: STOP_CONFIRMATION }, { quoted: message });
+    } catch (error) {
+      logger.error({ err: error }, 'failed to send STOP confirmation');
+    }
+    await logAudit(message, 'campaign-stop', STOP_CONFIRMATION, { campaignOptOut: true });
+    return;
+  }
+
+  if (lower === '!takeover') {
     takeoverSessions.add(remoteJid);
     await logAudit(message, 'takeover', undefined, { takeover: true });
     logger.info({ remoteJid }, 'takeover activated, disabling auto-reply');
@@ -360,29 +552,38 @@ const registerConnectionHandler = (sock: WASocket, recreate: () => WASocket) => 
 };
 
 const start = async () => {
-  const server = createHttpServer();
   const auth = await useMultiFileAuthState('./session');
+  let sock: WASocket | null = null;
 
-  const connect = () =>
-    makeWASocket({
+  const connect = () => {
+    const instance = makeWASocket({
       auth: auth.state,
       logger: logger as unknown as any,
       printQRInTerminal: true,
       browser: Browsers.appropriate(deviceLabel),
     });
+    sock = instance;
+    return instance;
+  };
 
-  let sock = connect();
-  sock.ev.on('creds.update', auth.saveCreds);
+  const server = createHttpServer(() => sock);
 
-  registerMessageHandler(sock);
-  registerConnectionHandler(sock, () => {
-    sock = connect();
-    sock.ev.on('creds.update', auth.saveCreds);
-    return sock;
-  });
+  const attachHandlers = (instance: WASocket) => {
+    instance.ev.on('creds.update', auth.saveCreds);
+    registerMessageHandler(instance);
+    registerConnectionHandler(instance, () => {
+      const next = connect();
+      attachHandlers(next);
+      return next;
+    });
+  };
+
+  const activeSocket = connect();
+  attachHandlers(activeSocket);
 
   const shutdown = async () => {
     logger.info('shutting down');
+    sock = null;
     server.close(() => process.exit(0));
   };
 

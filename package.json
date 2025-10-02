@@ -4,7 +4,9 @@
   "scripts": {
     "prisma:generate": "prisma generate",
     "prisma:migrate:deploy": "prisma migrate deploy",
-    "prisma:format": "prisma format"
+    "prisma:format": "prisma format",
+    "dev:seed": "pnpm --dir services/api dev:seed",
+    "test": "pnpm --dir services/api test"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0"
