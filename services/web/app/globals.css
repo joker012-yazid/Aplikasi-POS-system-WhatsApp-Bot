@@ -6,6 +6,118 @@
   color-scheme: light;
 }
 
-body {
-  @apply bg-slate-50 text-slate-900;
+@layer base {
+  :root {
+    --background: 210 40% 98%;
+    --foreground: 222 47% 11%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    --primary: 221 83% 53%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+
+    --accent: 217 91% 60%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 217 91% 60%;
+
+    --radius: 0.75rem;
+  }
+
+  .dark {
+    color-scheme: dark;
+
+    --background: 222 47% 11%;
+    --foreground: 213 31% 91%;
+
+    --card: 222 47% 13%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222 47% 11%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 217 91% 60%;
+    --primary-foreground: 222 47% 13%;
+
+    --secondary: 217 32% 17%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 217 32% 17%;
+    --muted-foreground: 215 20% 65%;
+
+    --accent: 217 91% 60%;
+    --accent-foreground: 222 47% 13%;
+
+    --destructive: 0 62% 51%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 217 32% 23%;
+    --input: 217 32% 23%;
+    --ring: 224 76% 48%;
+  }
+
+  [data-theme='ocean'] {
+    --accent: 217 91% 60%;
+    --accent-foreground: 210 40% 98%;
+    --primary: var(--accent);
+    --primary-foreground: var(--accent-foreground);
+    --ring: var(--accent);
+  }
+
+  [data-theme='forest'] {
+    --accent: 142 71% 45%;
+    --accent-foreground: 144 70% 96%;
+    --primary: var(--accent);
+    --primary-foreground: var(--accent-foreground);
+    --ring: var(--accent);
+  }
+
+  [data-theme='sunset'] {
+    --accent: 31 92% 55%;
+    --accent-foreground: 20 92% 96%;
+    --primary: var(--accent);
+    --primary-foreground: var(--accent-foreground);
+    --ring: var(--accent);
+  }
+
+  [data-theme='orchid'] {
+    --accent: 296 64% 58%;
+    --accent-foreground: 303 100% 98%;
+    --primary: var(--accent);
+    --primary-foreground: var(--accent-foreground);
+    --ring: var(--accent);
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+
+  input,
+  textarea,
+  select {
+    @apply bg-background text-foreground;
+  }
+
+  a {
+    @apply underline-offset-4;
+  }
 }

@@ -41,6 +41,12 @@ enum InventoryMoveType {
   ADJUSTMENT
 }
 
+enum ProductType {
+  SIMPLE
+  VARIANT
+  BUNDLE
+}
+
 enum InvoiceStatus {
   DRAFT
   SENT
@@ -65,6 +71,35 @@ enum PaymentMethod {
   OTHER
 }
 
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  RUNNING
+  PAUSED
+  COMPLETED
+}
+
+enum CampaignRecipientStatus {
+  PENDING
+  SCHEDULED
+  SENT
+  DELIVERED
+  READ
+  REPLIED
+  OPTED_OUT
+  FAILED
+}
+
+enum CampaignEventType {
+  QUEUED
+  SENT
+  DELIVERED
+  READ
+  REPLIED
+  OPT_OUT
+  ERROR
+}
+
 model Customer {
   id         String    @id @default(uuid()) @db.Uuid
   created_at DateTime  @default(now())
@@ -83,6 +118,7 @@ model Customer {
   invoices   Invoice[]
   quotes     Quote[]
   tickets    WorkTicket[]
+  campaignRecipients CampaignRecipient[]
 
   @@index([phone])
   @@index([email])
@@ -151,12 +187,90 @@ model Campaign {
   deleted_at DateTime?
 
   name         String
-  slug         String?   @unique
-  description  String?   @db.Text
-  status       String?
+  slug         String?              @unique
+  description  String?              @db.Text
+  status       CampaignStatus       @default(DRAFT)
   scheduled_at DateTime?
   started_at   DateTime?
   completed_at DateTime?
+  template_body      String?         @db.Text
+  template_variables String[]        @default([])
+
+  segments   CampaignSegment[]
+  recipients CampaignRecipient[]
+}
+
+model CampaignSegment {
+  id         String    @id @default(uuid()) @db.Uuid
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime?
+
+  campaign_id              String   @db.Uuid
+  key                      String
+  name                     String
+  timezone                 String   @default("Asia/Kuala_Lumpur")
+  timezone_offset_minutes  Int      @default(0)
+  throttle_per_minute      Int      @default(60)
+  jitter_seconds           Int      @default(0)
+  daily_cap                Int      @default(0)
+  window_start_hour        Int?
+  window_end_hour          Int?
+  next_send_at             DateTime?
+  daily_quota_date         DateTime?
+  daily_quota_used         Int      @default(0)
+
+  campaign Campaign            @relation(fields: [campaign_id], references: [id])
+  recipients CampaignRecipient[]
+
+  @@unique([campaign_id, key])
+}
+
+model CampaignRecipient {
+  id         String    @id @default(uuid()) @db.Uuid
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime?
+
+  campaign_id String   @db.Uuid
+  segment_id  String?  @db.Uuid
+  customer_id String?  @db.Uuid
+  phone       String
+  name        String?
+  variables   Json?
+  status      CampaignRecipientStatus @default(PENDING)
+  scheduled_for DateTime?
+  sent_at       DateTime?
+  delivered_at  DateTime?
+  read_at       DateTime?
+  replied_at    DateTime?
+  opt_out_at    DateTime?
+  error         String?  @db.Text
+
+  campaign Campaign       @relation(fields: [campaign_id], references: [id])
+  segment  CampaignSegment? @relation(fields: [segment_id], references: [id])
+  customer Customer?      @relation(fields: [customer_id], references: [id])
+  events   CampaignEvent[]
+
+  @@unique([campaign_id, phone])
+  @@index([segment_id])
+  @@index([status])
+  @@index([scheduled_for])
+}
+
+model CampaignEvent {
+  id         String    @id @default(uuid()) @db.Uuid
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime?
+
+  recipient_id String           @db.Uuid
+  type         CampaignEventType
+  payload      Json?
+
+  recipient CampaignRecipient @relation(fields: [recipient_id], references: [id])
+
+  @@index([recipient_id])
 }
 
 model Product {
@@ -165,16 +279,27 @@ model Product {
   updated_at DateTime  @updatedAt
   deleted_at DateTime?
 
-  sku         String   @unique
-  name        String
-  description String?  @db.Text
-  price       Decimal? @db.Decimal(12, 2)
-  currency    String?  @default("MYR")
-  is_active   Boolean  @default(true)
+  sku              String   @unique
+  name             String
+  description      String?  @db.Text
+  price            Decimal? @db.Decimal(12, 2)
+  wholesale_price  Decimal? @db.Decimal(12, 2)
+  currency         String?  @default("MYR")
+  is_active        Boolean  @default(true)
+  min_stock        Int      @default(0)
+  type             ProductType @default(SIMPLE)
+  parent_id        String?  @db.Uuid
+
+  parent      Product?             @relation("ProductVariants", fields: [parent_id], references: [id])
+  variants    Product[]            @relation("ProductVariants")
+  bundleItems ProductBundleItem[]  @relation("BundleItemsBundle")
+  components  ProductBundleItem[]  @relation("BundleItemsComponent")
 
   inventory    InventoryMove[]
   invoiceItems InvoiceItem[]
   quoteItems   QuoteItem[]
+
+  @@index([parent_id])
 }
 
 model InventoryMove {
@@ -192,6 +317,20 @@ model InventoryMove {
   product Product @relation(fields: [product_id], references: [id])
 }
 
+model ProductBundleItem {
+  id           String   @id @default(uuid()) @db.Uuid
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+  bundle_id    String   @db.Uuid
+  component_id String   @db.Uuid
+  quantity     Int      @default(1)
+
+  bundle    Product @relation("BundleItemsBundle", fields: [bundle_id], references: [id])
+  component Product @relation("BundleItemsComponent", fields: [component_id], references: [id])
+
+  @@unique([bundle_id, component_id])
+}
+
 model Invoice {
   id         String    @id @default(uuid()) @db.Uuid
   created_at DateTime  @default(now())
@@ -207,6 +346,7 @@ model Invoice {
   currency     String        @default("MYR")
   total_amount Decimal?      @db.Decimal(12, 2)
   notes        String?       @db.Text
+  metadata     Json?
 
   customer Customer?     @relation(fields: [customer_id], references: [id])
   quote    Quote?        @relation("QuoteInvoices", fields: [quote_id], references: [id])
@@ -227,6 +367,7 @@ model InvoiceItem {
   quantity    Int
   unit_price  Decimal @db.Decimal(12, 2)
   total_price Decimal @db.Decimal(12, 2)
+  metadata    Json?
 
   invoice Invoice  @relation(fields: [invoice_id], references: [id])
   product Product? @relation(fields: [product_id], references: [id])

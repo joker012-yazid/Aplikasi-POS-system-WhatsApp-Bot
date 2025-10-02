@@ -4,7 +4,7 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: 'WA-POS-CRM Dashboard',
-  description: 'Placeholder dashboard for WA-POS-CRM',
+  description: 'Panel pentadbir untuk POS & WhatsApp Bot',
   manifest: '/manifest.json',
 };
 
@@ -14,8 +14,8 @@ type RootLayoutProps = {
 
 export default function RootLayout({ children }: RootLayoutProps) {
   return (
-    <html lang="en" className="min-h-full bg-slate-50">
-      <body className="min-h-screen font-sans antialiased">{children}</body>
+    <html lang="en" data-theme="ocean" className="min-h-full" suppressHydrationWarning>
+      <body className="min-h-screen bg-background font-sans text-foreground antialiased">{children}</body>
     </html>
   );
 }

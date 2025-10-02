@@ -18,7 +18,7 @@ export default function LocaleLayout({ children, params }: LocaleLayoutProps) {
   }
 
   return (
-    <section data-locale={locale} className="min-h-screen bg-slate-50">
+    <section data-locale={locale} className="min-h-screen bg-background">
       {children}
     </section>
   );
