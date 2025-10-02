@@ -1,0 +1,387 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ConsentChannel {
+  whatsapp
+}
+
+enum WorkTicketStatus {
+  NEW
+  IN_PROGRESS
+  READY
+  CLOSED
+}
+
+enum WorkTicketEventType {
+  CREATED
+  NOTE
+  PHOTO
+  ESTIMATE_SET
+  CUSTOMER_APPROVED
+  CUSTOMER_DECLINED
+  READY
+  PICKED_UP
+}
+
+enum UserRole {
+  admin
+  tech
+  cashier
+}
+
+enum InventoryMoveType {
+  IN
+  OUT
+  ADJUSTMENT
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PARTIALLY_PAID
+  PAID
+  VOID
+}
+
+enum QuoteStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  DECLINED
+  EXPIRED
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  TRANSFER
+  EWALLET
+  OTHER
+}
+
+model Customer {
+  id         String    @id @default(uuid()) @db.Uuid
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime?
+
+  name    String
+  phone   String?
+  email   String?
+  address String?
+  notes   String? @db.Text
+
+  devices    Device[]
+  wa_threads WaThread[]
+  consents   Consent[]
+  invoices   Invoice[]
+  quotes     Quote[]
+  tickets    WorkTicket[]
+
+  @@index([phone])
+  @@index([email])
+}
+
+model Device {
+  id         String    @id @default(uuid()) @db.Uuid
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime?
+
+  customer_id  String? @db.Uuid
+  label        String
+  platform     String?
+  phone_number String?
+  status       String?
+  category     String?
+  brand        String?
+  model        String?
+  serial       String?
+  accessories  String? @db.Text
+
+  customer Customer?    @relation(fields: [customer_id], references: [id])
+  threads  WaThread[]
+  tickets  WorkTicket[]
+}
+
+model WaThread {
+  id         String    @id @default(uuid()) @db.Uuid
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime?
+
+  customer_id     String    @db.Uuid
+  device_id       String    @db.Uuid
+  remote_jid      String
+  last_message_at DateTime?
+  metadata        Json?
+
+  customer Customer @relation(fields: [customer_id], references: [id])
+  device   Device   @relation(fields: [device_id], references: [id])
+
+  @@unique([device_id, remote_jid])
+}
+
+model Consent {
+  id         String    @id @default(uuid()) @db.Uuid
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime?
+
+  customer_id String         @db.Uuid
+  channel     ConsentChannel @default(whatsapp)
+  opt_in_at   DateTime?
+  opt_out_at  DateTime?
+
+  customer Customer @relation(fields: [customer_id], references: [id])
+
+  @@unique([customer_id, channel])
+}
+
+model Campaign {
+  id         String    @id @default(uuid()) @db.Uuid
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime?
+
+  name         String
+  slug         String?   @unique
+  description  String?   @db.Text
+  status       String?
+  scheduled_at DateTime?
+  started_at   DateTime?
+  completed_at DateTime?
+}
+
+model Product {
+  id         String    @id @default(uuid()) @db.Uuid
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime?
+
+  sku         String   @unique
+  name        String
+  description String?  @db.Text
+  price       Decimal? @db.Decimal(12, 2)
+  currency    String?  @default("MYR")
+  is_active   Boolean  @default(true)
+
+  inventory    InventoryMove[]
+  invoiceItems InvoiceItem[]
+  quoteItems   QuoteItem[]
+}
+
+model InventoryMove {
+  id         String    @id @default(uuid()) @db.Uuid
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime?
+
+  product_id String            @db.Uuid
+  type       InventoryMoveType
+  quantity   Int
+  reference  String?
+  notes      String?           @db.Text
+
+  product Product @relation(fields: [product_id], references: [id])
+}
+
+model Invoice {
+  id         String    @id @default(uuid()) @db.Uuid
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime?
+
+  customer_id  String?       @db.Uuid
+  quote_id     String?       @unique @db.Uuid
+  number       String        @unique
+  status       InvoiceStatus @default(DRAFT)
+  issued_at    DateTime?
+  due_at       DateTime?
+  currency     String        @default("MYR")
+  total_amount Decimal?      @db.Decimal(12, 2)
+  notes        String?       @db.Text
+
+  customer Customer?     @relation(fields: [customer_id], references: [id])
+  quote    Quote?        @relation("QuoteInvoices", fields: [quote_id], references: [id])
+  items    InvoiceItem[]
+  payments Payment[]
+  tickets  WorkTicket[]
+}
+
+model InvoiceItem {
+  id         String    @id @default(uuid()) @db.Uuid
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime?
+
+  invoice_id  String  @db.Uuid
+  product_id  String? @db.Uuid
+  description String
+  quantity    Int
+  unit_price  Decimal @db.Decimal(12, 2)
+  total_price Decimal @db.Decimal(12, 2)
+
+  invoice Invoice  @relation(fields: [invoice_id], references: [id])
+  product Product? @relation(fields: [product_id], references: [id])
+}
+
+model Quote {
+  id         String    @id @default(uuid()) @db.Uuid
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime?
+
+  customer_id  String      @db.Uuid
+  reference    String?     @unique
+  status       QuoteStatus @default(DRAFT)
+  valid_until  DateTime?
+  currency     String      @default("MYR")
+  total_amount Decimal?    @db.Decimal(12, 2)
+  notes        String?     @db.Text
+
+  customer Customer     @relation(fields: [customer_id], references: [id])
+  invoice  Invoice?     @relation("QuoteInvoices")
+  items    QuoteItem[]
+  tickets  WorkTicket[]
+}
+
+model QuoteItem {
+  id         String    @id @default(uuid()) @db.Uuid
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime?
+
+  quote_id    String  @db.Uuid
+  product_id  String? @db.Uuid
+  description String
+  quantity    Int
+  unit_price  Decimal @db.Decimal(12, 2)
+  total_price Decimal @db.Decimal(12, 2)
+
+  quote   Quote    @relation(fields: [quote_id], references: [id])
+  product Product? @relation(fields: [product_id], references: [id])
+}
+
+model Payment {
+  id         String    @id @default(uuid()) @db.Uuid
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime?
+
+  invoice_id String         @db.Uuid
+  method     PaymentMethod?
+  amount     Decimal        @db.Decimal(12, 2)
+  paid_at    DateTime       @default(now())
+  reference  String?
+  notes      String?        @db.Text
+
+  invoice Invoice @relation(fields: [invoice_id], references: [id])
+}
+
+model WorkTicket {
+  id         String    @id @default(uuid()) @db.Uuid
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime?
+
+  customer_id    String?          @db.Uuid
+  device_id      String?          @db.Uuid
+  invoice_id     String?          @db.Uuid
+  quote_id       String?          @db.Uuid
+  status         WorkTicketStatus @default(NEW)
+  title          String
+  description    String?          @db.Text
+  price_estimate Decimal?         @db.Decimal(12, 2)
+  eta_ready_at   DateTime?
+  assignee_id    String?          @db.Uuid
+
+  customer     Customer?         @relation(fields: [customer_id], references: [id])
+  device       Device?           @relation(fields: [device_id], references: [id])
+  invoice      Invoice?          @relation(fields: [invoice_id], references: [id])
+  quote        Quote?            @relation(fields: [quote_id], references: [id])
+  events       WorkTicketEvent[]
+  intake_forms IntakeForm[]
+  assignee     User?             @relation("WorkTicketAssignee", fields: [assignee_id], references: [id])
+
+  @@index([status, created_at])
+}
+
+model WorkTicketEvent {
+  id         String    @id @default(uuid()) @db.Uuid
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime?
+
+  ticket_id   String                  @db.Uuid
+  type        WorkTicketEventType
+  payload     Json?
+  note        String?                 @db.Text
+  author_id   String?                 @db.Uuid
+  note_search Unsupported("tsvector") @default(dbgenerated("to_tsvector('simple', coalesce(note, ''))"))
+
+  ticket WorkTicket @relation(fields: [ticket_id], references: [id])
+  author User?      @relation(fields: [author_id], references: [id])
+
+  @@index([note_search], type: Gin)
+}
+
+model IntakeForm {
+  id         String    @id @default(uuid()) @db.Uuid
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime?
+
+  ticket_id String @db.Uuid
+  raw       Json
+
+  ticket WorkTicket @relation(fields: [ticket_id], references: [id])
+}
+
+model AuditLog {
+  id         String    @id @default(uuid()) @db.Uuid
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime?
+
+  entity    String
+  entity_id String
+  action    String
+  diff      Json?
+  metadata  Json?
+  actor_id  String? @db.Uuid
+
+  actor User? @relation("AuditActor", fields: [actor_id], references: [id])
+}
+
+model User {
+  id         String    @id @default(uuid()) @db.Uuid
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime?
+
+  email    String   @unique
+  password String
+  name     String?
+  role     UserRole
+
+  assigned_tickets WorkTicket[]      @relation("WorkTicketAssignee")
+  events           WorkTicketEvent[]
+  audit_logs       AuditLog[]        @relation("AuditActor")
+}
+
+model Setting {
+  id         String    @id @default(uuid()) @db.Uuid
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  deleted_at DateTime?
+
+  key   String @unique
+  value Json?
+}
