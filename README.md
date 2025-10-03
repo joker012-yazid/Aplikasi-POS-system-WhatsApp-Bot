@@ -1,4 +1,3 @@
-````markdown
 # WA-POS-CRM (Docker)
 
 Sistem bersepadu untuk **WhatsApp Chat with AI (Baileys MD + OpenAI)**, **WhatsApp Campaign (Compliance-first)**, **POS moden**, **CRM & Tiket Kerja (3 tahap)**, serta **Web UI** yang profesional & senang diguna.
