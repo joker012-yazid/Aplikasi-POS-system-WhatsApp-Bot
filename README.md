@@ -1,142 +1,283 @@
-# WA-POS-CRM Monorepo
+````markdown
+# WA-POS-CRM (Docker)
 
-Rangka asas sistem **WA-POS-CRM** berasaskan Docker Compose. Projek ini menyediakan servis API, web, bot WhatsApp, scheduler, worker, serta infrastruktur Postgres, Redis dan Nginx reverse proxy.
+Sistem bersepadu untuk **WhatsApp Chat with AI (Baileys MD + OpenAI)**, **WhatsApp Campaign (Compliance-first)**, **POS moden**, **CRM & Tiket Kerja (3 tahap)**, serta **Web UI** yang profesional & senang diguna.
 
-## Struktur Direktori
+---
 
-```
-services/
-  api/           # API Express + TypeScript
-  web/           # Next.js + Tailwind + shadcn/ui + i18n + PWA
-  wa-bot/        # WhatsApp Bot (Baileys MD)
-  scheduler/     # Cron jobs
-  worker/        # Queue worker
-scripts/         # Utiliti pembangunan
-```
+## 0) Ringkasan Ciri
+- **WhatsApp Bot (Baileys MD)**: pairing QR/pairing code, auto-reconnect, router mesej, escalation ke manusia.
+- **Tiket Kerja (3 Tahap)**: `NEW` → `IN_PROGRESS` → `READY`, anggaran + ETA, gambar progres, auto-notifikasi WhatsApp, follow-up 1/20/30 hari.
+- **Borang Pelanggan + QR**: pelanggan isi borang (mobile/PWA), data terus ke DB, cipta tiket automatik.
+- **POS & CRM**: produk, inventori, invois/quotation, pelanggan & servis, laporan ringkas.
+- **e-Invois Malaysia (adapter MyInvois)**: mod `portal` (eksport fail) dan stub `api` (sedia diaktifkan).
+- **Web UI**: Next.js + Tailwind + shadcn/ui, tema Light/Dark, Settings lengkap, Update Panel.
 
-## Dokumentasi Lengkap
+---
 
-Panduan operasi terperinci (setup, tiket, POS, MyInvois, kempen, sandaran, FAQ) disediakan di folder [`docs/`](docs/README.md). Mulakan dengan bahagian [Setup](docs/setup.md) untuk menyiapkan persekitaran dan pairing bot WhatsApp.
+## 1) Keperluan
+- **Git**
+- **Docker Engine v24+** dan **Docker Compose v2**
+- Linux x86_64 (Ubuntu 22.04/24.04 disyorkan)
+- Buka port: `80`/`443` (web)
 
-## Persediaan
+> Untuk OS lain (Windows/macOS/Docker Desktop), ikut panduan rasmi Docker.
 
-1. Salin `.env.example` kepada `.env` dan kemaskini nilai rahsia:
-   ```bash
-   cp .env.example .env
-   ```
-2. Pastikan `docker` dan `docker compose` tersedia dalam mesin anda.
+---
 
-## Mod Pembangunan
+## 2) Pasang Docker & Compose (Ubuntu/Debian)
+Jalankan sebagai `root` atau user dengan `sudo`.
 
-1. Jalankan semua servis:
-   ```bash
-   ./scripts/dev-up
-   ```
-2. Semak log gabungan:
-   ```bash
-   ./scripts/dev-logs
-   ```
-3. Hentikan semua servis:
-   ```bash
-   ./scripts/dev-down
-   ```
-
-Perkhidmatan penting:
-- Web: http://localhost/ (placeholder Dashboard dengan sokongan BM/EN)
-- API: http://localhost/api/
-- Bot: http://localhost/bot/
-
-### API Modul
-
-- Modul disediakan: auth, customers, devices, tickets, repairs, stock, pos, campaigns, settings.
-- Auth menggunakan JWT dengan peranan `admin`, `tech`, `cashier`. Semua laluan tulis memerlukan token sah serta peranan dibenarkan.
-- Akaun pentadbir lalai akan diwujudkan jika tiada (rujuk pembolehubah `DEFAULT_ADMIN_*` dalam `.env`). Gunakan `POST /api/auth/login` untuk mendapatkan token.
-- Koleksi Postman/Insomnia auto-dijana di `services/api/collections/wa-pos-crm.postman_collection.json` setiap kali `pnpm --dir services/api export:collection` atau semasa servis API bermula.
-- Laluan penting tiket:
-  - `POST /api/tickets/intake`
-  - `PATCH /api/tickets/:id/estimate`
-  - `POST /api/tickets/:id/ready`
-  - `PATCH /api/tickets/:id/status`
-  - `POST /api/tickets/:id/request-approval`
-  - `GET /api/tickets/kanban`
-- Modul AI balas pelanggan:
-  - `POST /api/ai/reply` (perlukan token). Input `{ thread, question, customer_id? }` dan menggunakan OpenAI Responses API dengan data CRM/POS sebagai konteks.
-  - Jika tiada data berkaitan ditemui, API akan membalas templat sopan "Tunggu sebentar, teknisyen kami akan menghubungi anda.".
-  - Log prompt (di-redact) dan jawapan disimpan dalam `audit_logs` untuk rujukan.
-- Endpoints awam baharu untuk intake pelanggan:
-  - `GET /api/public/customer-form` (konfigurasi medan semasa)
-  - `POST /api/public/customer-form` (serahan borang pelanggan → cipta tiket baharu)
-
-### Borang Intake Pelanggan
-
-- **Halaman pelanggan**: `http://localhost/forms/customer` — mesra mudah alih & PWA, menyokong muat naik foto, dan memaparkan ID tiket selepas serahan.
-- **Builder admin**: `http://localhost/ms/admin/customer-form` (BM) atau `http://localhost/en/admin/customer-form` — aktifkan/tidak aktifkan atau wajibkan setiap medan tanpa deploy semula. Sediakan token JWT admin (rujuk `POST /api/auth/login`).
-- Builder memaparkan kod QR ke borang pelanggan untuk dikongsi di kaunter servis.
-- Konfigurasi disimpan dalam jadual `settings` (key `customerForm`); tetapan dibaca secara langsung oleh borang pelanggan.
-- Serahan borang akan:
-  1. Simpan data mentah ke `intake_forms`
-  2. Padan / cipta pelanggan & peranti (jenama/model/siri)
-  3. Cipta `work_tickets` status `NEW` + acara `CREATED`
- 4. Kemaskini konsen WhatsApp (`consents`)
-
-### Kanban Tiket Kerja
-
-- **Halaman admin**: `http://localhost/ms/admin/tickets` atau `http://localhost/en/admin/tickets` menampilkan papan kanban `NEW → IN_PROGRESS → READY` dengan drag-and-drop.
-- Sediakan token JWT admin/tech melalui `POST /api/auth/login` dan letakkan di ruangan "Token Admin" untuk benarkan panggilan API.
-- Kad tiket memaparkan pelanggan, maklumat peranti, masalah, SLA badge (hampir/lewat ETA), anggaran, lampiran serta pintasan "Chat WA".
-- Tindakan pantas:
-  - **Set Anggaran & ETA** → `PATCH /api/tickets/:id/estimate`
-  - **Minta Kelulusan** → `POST /api/tickets/:id/request-approval` (bot WhatsApp akan mengambil catatan ini)
-  - **Nota / Gambar** → `POST /api/repairs/:id/note` (jenis NOTE/PHOTO)
-  - **Tanda Siap** → `POST /api/tickets/:id/ready`
-- Seretan ke kolum baharu akan memanggil API berkaitan dan segar semula papan secara automatik.
-- Rujuk [docs/tickets.md](docs/tickets.md) untuk aliran penuh `NEW → IN_PROGRESS → READY → PICKED_UP`, hook WhatsApp, dan follow-up automatik.
-
-### Login Bot WhatsApp
-
-1. Semak log `wa-bot` untuk kod pairing atau QR (dicetak ke terminal).
-2. Gunakan aplikasi WhatsApp → Peranti Terpaut → Pautkan Peranti → Masukkan kod / imbas QR.
-3. Sesi akan disimpan dalam volume `wa_bot_session` supaya kekal selepas restart.
-4. Konfigurasi pembolehubah `WA_API_EMAIL` dan `WA_API_PASSWORD` untuk akaun servis (peranan `admin`/`tech`) serta `WA_API_BASE_URL` jika API berada pada host lain. Bot akan login ke API, log mesej ke `audit_logs`, memproses intent `status`, `harga`, `janji temu`, `invois`, dan mencipta tiket intake apabila pautan borang dikongsi. Hantar `!takeover` dalam chat untuk hentikan balasan automatik sementara waktu.
-5. Jika perlu reset atau ulang pairing, rujuk panduan [docs/setup.md#pairing-bot-whatsapp-baileys](docs/setup.md#pairing-bot-whatsapp-baileys) sebelum memadam volume `wa_bot_session`.
-
-## Mod Produksi
-
-1. Bina imej produksi:
-   ```bash
-   docker compose -f docker-compose.yml build --no-cache --progress=plain
-   ```
-2. Jalankan dalam mod latar:
-   ```bash
-   docker compose up -d
-   ```
-3. Pantau status:
-   ```bash
-   docker compose ps
-   docker compose logs -f
-   ```
-
-## Sandaran & Pemulihan Pangkalan Data
-
-Sandaran Postgres:
 ```bash
-docker compose exec postgres pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" > backup.sql
-```
+# 2.1 Pasang Docker Engine (Ubuntu)
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl gnupg
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
+  sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+  https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io
 
-Pemulihan:
+# 2.2 Pasang Docker Compose (plugin v2)
+sudo apt-get install -y docker-compose-plugin
+docker compose version
+````
+
+> **Opsyen:** Guna Docker tanpa `sudo`
+>
+> ```
+> sudo groupadd docker 2>/dev/null || true
+> sudo usermod -aG docker $USER
+> # log keluar & masuk semula
+> ```
+>
+> **Alternatif keselamatan:** Docker **Rootless mode** (rujuk docs).
+
+---
+
+## 3) Klon Repo dari GitHub
+
+Gantikan `YOUR_REPO_URL` dengan URL repo anda (HTTPS/SSH).
+
 ```bash
-docker compose exec -T postgres psql -U "$POSTGRES_USER" "$POSTGRES_DB" < backup.sql
+cd /opt
+sudo git clone YOUR_REPO_URL wa-pos-crm
+sudo chown -R $USER:$USER wa-pos-crm
+cd wa-pos-crm
 ```
 
-Pastikan `backup.sql` berada di host sebelum menjalankan arahan pemulihan.
+---
 
-## Kesihatan Servis
+## 4) Sediakan Fail `.env`
 
-Setiap servis mempunyai healthcheck; `docker compose ps` akan memaparkan status. Pastikan semua servis berstatus `healthy` sebelum pembangunan lanjut.
+Salin templat dan isi nilai penting.
 
-## Nota Tambahan
+```bash
+cp .env.example .env
+nano .env
+```
 
-- Folder `scripts/` menyediakan helper asas.
-- Servis `scheduler` dan `worker` memerlukan Redis tersedia (`redis://redis:6379`).
-- Untuk maklumat modul POS, kampen opt-in, dan FAQ penyelenggaraan, rujuk direktori [`docs/`](docs/README.md).
-- Tukar `MYINVOIS_MODE` kepada `portal` atau `api` mengikut integrasi sebenar (rujuk [docs/myinvois.md](docs/myinvois.md) untuk langkah eksport dan integrasi API).
+**Contoh `.env` (ringkas):**
+
+```dotenv
+# DB
+POSTGRES_USER=wa_admin
+POSTGRES_PASSWORD=change_me
+POSTGRES_DB=wa_app
+DATABASE_URL=postgresql://wa_admin:change_me@postgres:5432/wa_app
+
+# Redis
+REDIS_URL=redis://redis:6379/0
+
+# App
+NODE_ENV=production
+JWT_SECRET=please_change_me
+APP_BASE_URL=https://your.domain
+
+# WhatsApp / AI
+OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxx
+WA_DEVICE_LABEL="WA-POS-CRM (Server-1)"
+
+# e-Invois
+MYINVOIS_MODE=portal   # portal | api
+```
+
+> **Nota Compose & `.env`:** Nilai boleh datang dari CLI/env/`env_file`. Jika guna banyak fail Compose (`-f`), fail belakang override yang depan.
+
+---
+
+## 5) Jalankan Stack (Dev/Prod)
+
+```bash
+# 5.1 Mulakan semua servis
+docker compose up -d
+
+# 5.2 (Jika guna Prisma) jana klien & migrate
+docker compose exec api pnpm prisma migrate deploy || true
+docker compose exec api pnpm prisma db push || true
+
+# 5.3 Semak status & log
+docker compose ps
+docker compose logs -f api
+```
+
+**Guna banyak fail Compose (opsyen prod):**
+
+```bash
+docker compose -f compose.yml -f compose.prod.yml up -d
+```
+
+---
+
+## 6) Pair WhatsApp (Baileys MD)
+
+**A. QR Code**
+
+```bash
+docker compose logs -f wa-bot
+# Imbas QR di WhatsApp > Linked devices
+```
+
+**B. Pairing Code**
+
+* Sediakan endpoint/skrip pairing code (ikut implementasi `wa-bot` anda).
+* Masukkan nombor telefon dengan kod negara (angka sahaja).
+
+> Perhatikan event `connection.update` & simpan sesi di volume.
+
+---
+
+## 7) Semak Health
+
+```bash
+# Web UI
+curl -I http://localhost/
+
+# API
+curl -s http://localhost/api/health
+
+# DB
+docker compose exec postgres pg_isready -U $POSTGRES_USER
+
+# Bot
+docker compose logs --tail=50 wa-bot
+```
+
+---
+
+## 8) Aliran Kerja (destil)
+
+1. **Scan QR → Isi Borang** (pelanggan)
+2. **Tiket `NEW`** dicipta + bot hantar ack
+3. **Diagnosa + set Harga/ETA** → **`IN_PROGRESS`**
+4. **Siap + gambar** → **`READY`** + bot hantar invois/QR bayaran
+5. **Follow-up** automatik jika tiada respon (1/20/30 hari)
+
+---
+
+## 9) Backup & Restore (PostgreSQL)
+
+**Backup (dump) ke folder `backups/`:**
+
+```bash
+mkdir -p backups
+docker compose exec -T postgres pg_dump -U $POSTGRES_USER $POSTGRES_DB \
+  | gzip > backups/wa_app_$(date +%F_%H%M).sql.gz
+```
+
+**Pulih semula:**
+
+```bash
+gunzip -c backups/wa_app_YYYY-MM-DD_HHMM.sql.gz | \
+  docker compose exec -T postgres psql -U $POSTGRES_USER -d $POSTGRES_DB
+```
+
+> Cadang jadualkan cron/`scheduler` untuk auto-backup harian (sebelum update).
+
+---
+
+## 10) Kemas Kini & Rollback
+
+**Kemas kini (image):**
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+**Kemas kini (bina dari repo):**
+
+```bash
+git pull origin main
+docker compose build --no-cache
+docker compose up -d
+```
+
+**Rollback cepat:**
+
+```bash
+git checkout <previous_tag_or_commit>
+docker compose up -d
+```
+
+---
+
+## 11) Selepas Pasang (penting)
+
+* **Cipta admin** (contoh skrip anda):
+
+  ```bash
+  docker compose exec api pnpm ts-node scripts/create-admin.ts
+  ```
+* **Isi Settings di Web UI**: maklumat kedai/cukai/penomboran, templat mesej WA (ack/estimate/ready), throttle kempen, `OPENAI_API_KEY`, konfigurasi e-Invois.
+* **Uji Tiket Kerja 3 Tahap** (Kanban drag-drop & aksi pantas) dan WhatsApp hooks (ACK → minta kelulusan → siap + invois).
+
+---
+
+## 12) Nyahpasang (optional)
+
+```bash
+docker compose down
+# Buang volume bernama jika perlu (hati-hati: buang data!)
+docker volume ls | awk '/wa-pos-crm/ {print $2}' | xargs -r docker volume rm
+```
+
+---
+
+## 13) Nota & Amalan Baik
+
+* Gunakan **volume bernama** untuk `postgres` & `redis`.
+* **JANGAN commit `.env`** ke GitHub.
+* Aktifkan **HTTPS** (Nginx/Caddy + cert) sebelum dedah ke internet.
+* Guna banyak fail Compose (`compose.yml` + `compose.prod.yml`) untuk override prod.
+
+---
+
+## 14) Rujukan
+
+* Docker Engine (Ubuntu)
+* Docker Compose (Linux plugin)
+* Post-install: guna Docker tanpa `sudo`
+* Rootless mode (daemon tanpa root)
+* `.env` & precedence (Compose)
+* Multi-compose files & override
+* GitHub: clone repository
+* Baileys (Connecting; QR & Pairing Code)
+
+```
+
+---
+
+### Sumber rujukan yang digunakan
+- Pemasangan Docker Engine untuk Ubuntu (rasmi). :contentReference[oaicite:0]{index=0}  
+- Pemasangan **Docker Compose plugin** untuk Linux (rasmi). :contentReference[oaicite:1]{index=1}  
+- **Post-install**: tambah user ke kumpulan `docker` (jalan tanpa `sudo`). :contentReference[oaicite:2]{index=2}  
+- **Rootless mode** Docker (opsyen keselamatan). :contentReference[oaicite:3]{index=3}  
+- **Compose env precedence** & tetapan env. :contentReference[oaicite:4]{index=4}  
+- **Multiple Compose files** & cara **merge/override**. :contentReference[oaicite:5]{index=5}  
+- **GitHub Docs**: cara **clone repository**. :contentReference[oaicite:6]{index=6}  
+- **Baileys (WhiskeySockets)**: **Connecting (QR/pairing code)**. :contentReference[oaicite:7]{index=7}
