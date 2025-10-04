@@ -1,216 +1,253 @@
-# WA-POS-CRM — Technical Specification (Docker)
+# WA-POS-CRM — Technical Specification (Docker • Baileys • OpenAI • POS/CRM • e-Invoice)
 
-Sistem bersepadu: **WhatsApp Chat with AI (Baileys + OpenAI)**, **WhatsApp Campaign (Compliance-first)**, **POS moden**, **CRM + Tiket Kerja (3 tahap)**, **e-Invois Malaysia (MyInvois)**, dan **Web UI** profesional.
-
----
-
-## 1) Objective & Scope
-- Menyatukan interaksi pelanggan melalui WhatsApp (chat bot + notifikasi) dengan operasi kedai (tiket kerja, POS, inventori, invois/e-invois) dalam satu antarmuka web yang elegan dan mudah.  
-- Patuh **WhatsApp Business** (opt-in/opt-out, messaging limits), **PDPA Malaysia**, dan garis panduan **e-Invois LHDN**. :contentReference[oaicite:0]{index=0} :contentReference[oaicite:1]{index=1} :contentReference[oaicite:2]{index=2} :contentReference[oaicite:3]{index=3}
+> Purpose: A single web app that unifies WhatsApp AI chat, compliant campaigns, POS, CRM, Work Tickets (3 stages), Customer Intake Form (QR), and Malaysia e-Invoicing (MyInvois).
 
 ---
 
-## 2) System Architecture (High-Level)
-**Docker Compose** dengan servis:
-- `web` (Next.js/React + Tailwind + shadcn/ui, PWA, tema Light/Dark)
-- `api` (Node.js/TypeScript, Express/NestJS)
-- `wa-bot` (Node + **Baileys MD** untuk WhatsApp)
-- `postgres` (DB utama), `redis` (queue/cache)
-- `worker` (jobs async), `scheduler` (cron: backup, follow-up), `nginx` (reverse proxy)
+## 1) Architecture (High Level)
 
-Compose file gunakan **Compose Specification** (services/volumes/networks + healthcheck). Tambahkan **healthcheck** per servis untuk start-order jelas. :contentReference[oaicite:4]{index=4} :contentReference[oaicite:5]{index=5} :contentReference[oaicite:6]{index=6}
+**Stack (containers):**
+- `web` — Next.js (React) + Tailwind + shadcn/ui, PWA (light/dark, i18n)
+- `api` — Node.js (TypeScript, Express/NestJS), REST/JSON
+- `wa-bot` — Node + **Baileys MD** (QR/pairing code, persistent session, `connection.update`) 〔Baileys docs: QR & pairing; breaking changes notice〕. [Source] 
+- `postgres` — primary OLTP store (ACID)
+- `redis` — queues, rate-limiters, short-lived cache
+- `scheduler` — cron-like jobs (follow-ups, backups)
+- `worker` — async tasks (campaign send, media processing)
+- `nginx` — reverse proxy (TLS, gzip, static)
 
----
+**Inter-service routing:**
+- `/` → web
+- `/api/*` → api
+- `/bot/*` → wa-bot (optional internal webhook/testing)
 
-## 3) Core Features
-
-### 3.1 WhatsApp Chat with AI
-- **Login & sesi**: Baileys MD dengan pairing **QR/pairing code**, persist sesi, `connection.update` listener, auto-reconnect. :contentReference[oaicite:7]{index=7}
-- **Router mesej**: Klasifikasi intent (status tiket, harga, janji temu, invois). Jika tiada data → fallback “Tunggu sebentar…”.
-- **Grounded AI**: `api/ai/reply` guna **OpenAI Responses API** (Node SDK), suhu rendah, prompt guardrails → jawab berdasar data CRM/DB; fallback jika kosong. :contentReference[oaicite:8]{index=8} :contentReference[oaicite:9]{index=9}
-- **Escalation**: `!takeover` untuk staf ambil alih; audit semua interaksi.
-- **Kepatuhan**: hanya hubungi contact **opt-in**, sediakan opt-out mudah. Perlu peka **messaging limits** & reputasi. :contentReference[oaicite:10]{index=10} :contentReference[oaicite:11]{index=11} :contentReference[oaicite:12]{index=12}
-- **Risiko versi**: pantau **breaking changes** Baileys (7.x+). :contentReference[oaicite:13]{index=13}
-
-### 3.2 WhatsApp Campaign (Compliance-First & Anti-Ban)
-- **Recipients management**: hanya **opt-in**, dedup, validasi MSISDN; segmen (VIP, overdue, promo).
-- **Throttling & warm-up**: had/minute + jitter + cap harian per segmen; jadual ikut zon waktu.
-- **Template**: mesej ringkas/personal, **opt-out** automatik (“Reply STOP”).
-- **Metrics**: sent/delivered/read/reply/opt-out; eksport CSV; health score list.
-- **Patuh polisi & limits** setiap masa. :contentReference[oaicite:14]{index=14} :contentReference[oaicite:15]{index=15}
-
-### 3.3 POS Moden
-- **Jualan**: kaunter (touch-friendly), diskaun, borong; QR untuk pautan invois/pembayaran.
-- **Inventori**: SKU/variasi/bundle, min-stock alert, batch/serial, foto item.
-- **Cetakan**: resit/label; eksport PDF.
-- **Laporan**: jualan harian/7H/30H, top items, margin, performa staf.
-
-### 3.4 Tiket Kerja (3 Tahap) — “NEW → IN_PROGRESS → READY”
-- **NEW**: dicipta dari **Borang Pelanggan** (scan QR → submit) atau dari chat WA → bot kirim ACK + ID tiket.
-- **IN_PROGRESS**: teknisi tetapkan **anggaran harga** + **ETA**, tambah catatan dan foto progres; bot minta persetujuan.
-- **READY**: teknisi tandai siap, lampir foto; bot kirim notifikasi “siap & boleh ambil” + invois/QR bayar; **follow-up 1/20/30 hari** jika belum diambil.  
-  (Alur ini selaras dengan SOP intake→diagnosa→harga/ETA→siap→follow-up.) *(Rujuk dok SOP dalaman anda.)*
-
-### 3.5 Borang Pelanggan + QR (Form Builder)
-- **Builder mini** di Admin: boleh ON/OFF/Required setiap medan, tanpa deploy.
-- **Akses**: QR code ke URL borang (PWA/mobile friendly).
-- **Sesudah submit**: simpan `intake_form` → buat/padan `customer` & `device` → cipta `work_ticket: NEW` + event `CREATED` → balas ACK.
-- **Persetujuan**: checkbox **opt-in WhatsApp** + T&C (PDPA). :contentReference[oaicite:16]{index=16} :contentReference[oaicite:17]{index=17}
-
-### 3.6 e-Invois Malaysia (MyInvois)
-- **MODE `portal`**: eksport data (UBL/JSON sesuai guideline) siap muat naik manual.
-- **MODE `api`**: sediakan adapter `einvoice/myinvois.ts`: `submitInvoice()`, `getDocument()`, `searchDocuments()` (auth, mapping, status). Ikut **Guideline v4.x** & **SDK API** rasmi. :contentReference[oaicite:18]{index=18} :contentReference[oaicite:19]{index=19} :contentReference[oaicite:20]{index=20}
-
-### 3.7 Web UI (Profesional, Elegan)
-- **Dashboard**: metrik hari ini/7H/30H; Quick Actions (Buka POS, Cipta Tiket, Buat Kempen).
-- **Modul**: POS, Servis/Tiket, CRM, Stok, Kempen, Invois/Quotation/e-Invois, **Settings**, **Update Panel**.
-- **Aksesibiliti**: tema Light/Dark, i18n (BM/EN), PWA, keyboard-friendly.
+**External services (optional):**
+- OpenAI **Responses API** (grounded replies, low-temperature factual responses). [Source]
+- LHDN **MyInvois** Portal/API adapter (Malaysia e-Invoice). [Source]
 
 ---
 
-## 4) User Flows (End-to-End)
+## 2) Core Features (By Module)
 
-### 4.1 Intake & Tiket Kerja
-1. **Pelanggan** scan **QR** → isi Borang (nama, telefon, peranti, masalah, T&C, opt-in WA).  
-2. **API** validasi → simpan `intake_form` → buat/padan `customer`/`device` → **create `work_ticket: NEW`** + `event: CREATED`.  
-3. **Bot WA** kirim ACK + ID tiket.
+### 2.1 WhatsApp Chat with AI
+- Baileys MD login (QR/pairing), persistent session, auto-reconnect; observe `connection.update`. [Source]
+- Message router: intents (`status`, `price`, `appointment`, `invoice`) using keywords + rules + (optional) AI classification.
+- **Grounded AI** (OpenAI Responses API): answer strictly from CRM/POS data; fallback: *“Please wait, our technician will reply shortly.”* [Source]
+- Human takeover: `!takeover` command or UI button.
+- Audit logging: message-id, sender, intent, action, timestamps.
+- **Compliance**: only message opted-in customers; clear **opt-out** handling (“STOP”). [Source]
 
-### 4.2 Diagnosa → Estimate/ETA (IN_PROGRESS)
-1. **Teknisi** buka **Kanban** → isi **anggaran harga** + **ETA** → `PATCH /tickets/:id/estimate`.  
-2. **Bot** kirim info ke pelanggan → pelanggan **setuju/tolak** (balasan “OK/Ya/Setuju”).  
-3. **Event** `ESTIMATE_SET` tersimpan; status kekal **IN_PROGRESS** hingga siap.
+### 2.2 WhatsApp Campaign (Compliance-First, Anti-Ban)
+- Recipient management: import/update contacts with **explicit opt-in** evidence; deduplicate; number validation. [Source]
+- **Messaging limits awareness**: respect WABA messaging limits & upcoming policy changes; gradual warm-up; throttle/jitter; time-zone scheduling. [Sources]
+- Templates with personalization; add auto **opt-out** footer.
+- A/B test (intro/CTA), per-segment daily caps; health score (delivered/read/blocked).
+- Metrics & export: sent/delivered/read/reply/opt-out (CSV).
 
-### 4.3 Siap & Pengambilan (READY)
-1. **Teknisi** upload foto siap → `POST /tickets/:id/ready`.  
-2. **Bot** kirim “Laptop siap & boleh ambil” + pautan **invois/QR**; status **READY**.  
-3. **Pembayaran** di POS → resit/invois. **Scheduler** pantau follow-up 1/20/30 hari jika belum diambil.
+### 2.3 POS (Modern)
+- Products/SKUs, variants, bundles; min-stock alerts; barcode/QR scan.
+- Counter sales (touch-friendly), discounts, wholesale tiers.
+- Receipts/labels; payment QR link; refunds/returns.
+- Reports: daily/weekly sales, margin, top items.
+- Role & audit: cashier/tech/admin with logs.
 
-### 4.4 WhatsApp Campaign
-1. **Admin** import senarai **opt-in** (dedup, validasi).  
-2. **Settings** pilih template, throttle, jadual.  
-3. **Worker** hantar bertahap (log sent/delivered/read/reply/opt-out).  
-4. **Opt-out** memicu update `consents.opt_out_at` → dikecualikan otomatis. :contentReference[oaicite:21]{index=21}
+### 2.4 CRM + Work Tickets (3 Stages)
+- **Customer Intake Form (QR)**: admin-editable form builder; mobile/PWA; on submit → create/join Customer + Device + **Work Ticket (NEW)**.
+- **Ticket stages**:
+  1) **NEW** — created after intake submission; bot ACK with ticket ID.
+  2) **IN_PROGRESS** — technician sets **price estimate** + **ETA**, adds notes/photos; bot asks customer for approval.
+  3) **READY** — technician marks **ready**, uploads completion photos; bot sends “ready for pickup” + invoice/QR.
+- Escalations, SLA badges (close to ETA), Kanban board (drag-drop status).
+- **Automated follow-ups** if no response/pickup after **1/20/30 days**.
 
----
+### 2.5 e-Invoice (Malaysia, MyInvois)
+- Adapter with two modes:
+  - **Portal**: export UBL/JSON per latest guideline for manual upload.
+  - **API**: stub functions `submitInvoice`, `getDocument`, `searchDocuments` using MyInvois SDK/API when credentials ready.
+- Keep mapping for TIN, currency, tax rules, item lines per guideline version. [Sources]
 
-## 5) Database Schema (PostgreSQL + Prisma)
-
-### 5.1 Entities (ringkas)
-- **customers**: id (UUID), name, phone (unique), email, address, created_at, updated_at, deleted_at
-- **devices**: id, customer_id FK, category, brand, model, serial_no, accessories, condition_in, created_at, updated_at, deleted_at
-- **intake_forms**: id, customer_id FK?, payload JSON, created_at
-- **work_tickets**: id, customer_id FK, device_id FK, intake_form_id FK, status(`NEW|IN_PROGRESS|READY|CLOSED`), price_estimate (NUMERIC), eta_ready_at (TIMESTAMP), priority (INT), assignee_id (UUID?), created_at, updated_at, deleted_at
-- **work_ticket_events**: id, ticket_id FK, type(`CREATED|NOTE|PHOTO|ESTIMATE_SET|CUSTOMER_APPROVED|CUSTOMER_DECLINED|READY|PICKED_UP`), payload JSON (note, urls), actor(`bot|tech|system`), created_at
-- **products**: id, sku (unique), name, description, price, cost, stock, min_stock, variants JSON?, created_at, updated_at, deleted_at
-- **inventory_moves**: id, product_id FK, qty (INT), reason(`sale|return|adjustment|receive|repair`), ref_id, created_at
-- **invoices**: id, customer_id FK, total, tax, status(`draft|issued|paid|void`), einvoice_mode(`portal|api`), einvoice_ref, created_at, updated_at
-- **invoice_items**: id, invoice_id FK, product_id FK?, description, qty, unit_price, discount
-- **quotes**: id, customer_id FK, total, valid_until, status(`draft|sent|accepted|rejected`), created_at
-- **payments**: id, invoice_id FK, amount, method, txn_ref, paid_at
-- **wa_threads**: id, customer_id FK, last_msg_at, wa_number, label, created_at
-- **campaigns**: id, name, template, throttle_per_min, start_at, end_at, created_at
-- **consents**: id, customer_id FK, channel(`whatsapp`), opt_in_source, opt_in_at, opt_out_at
-- **audit_logs**: id, entity, entity_id, action, diff JSON, actor_id, created_at
-
-**Indexes**:  
-- `customers(phone)` unique, `work_tickets(status, created_at)`, full-text untuk notes/descriptions (Postgres `tsvector`).  
-**Migrations**: gunakan **Prisma Migrate**; sediakan seed & rollback scripts. :contentReference[oaicite:22]{index=22} :contentReference[oaicite:23]{index=23}
-
-> **Catatan**: gunakan **UUID v4**, `created_at/updated_at` default `now()`, `deleted_at` untuk soft-delete (filter di query layer).
+### 2.6 Web UI (Admin-first, Elegant)
+- Clean dashboard (KPIs: Today/7D/30D — sales, new tickets, ready).
+- Modules: **POS**, **Service/Tickets**, **CRM**, **Stock**, **WhatsApp Campaigns**, **Invoices/Quotes/e-Invoice**, **Settings**, **Updates**.
+- Settings (editable in UI): shop profile, tax, invoice numbering, WA templates (ack/estimate/ready), campaign throttle, backup schedule, API keys (OpenAI), DB DSNs, MyInvois config.
+- Update Panel: pre-flight (DB backup) → switch docker image tag → rolling restart.
 
 ---
 
-## 6) API Surface (Ringkas)
+## 3) End-to-End User Flows
 
-### 6.1 Auth & Settings
-- `POST /auth/login` → JWT (roles: `admin|tech|cashier`)
-- `GET/PUT /settings` → profil kedai, tax, penomboran, WA templates, throttle, backup schedule, `OPENAI_API_KEY`, e-Invois config
+### 3.1 Intake → Diagnosis → Ready → Pickup (Ticket 3-Stage)
+1. **Scan QR** → Customer opens **Intake Form** → submits personal, device, problem, consent (opt-in).  
+2. API saves `intake_form`, creates/links `customer` + `device`, creates `work_ticket(NEW)` + event `CREATED`; bot replies ACK with Ticket ID.  
+3. Technician diagnoses, sets **estimate/ETA** → `IN_PROGRESS`; bot sends estimate to customer and awaits approval.  
+4. Technician completes repair, uploads photos → `READY`; bot sends completion photos + **invoice link/QR**.  
+5. If no response/pickup: **scheduler** sends follow-ups at 1/20/30 days.  
+6. On pickup & payment, invoice is posted; ticket `CLOSED`.
 
-### 6.2 Tiket
-- `POST /tickets/intake` {form_id? | inline fields} → create **NEW**
-- `PATCH /tickets/:id/estimate` {price_estimate, eta_ready_at}
-- `POST /tickets/:id/event` {type, payload} (NOTE, PHOTO, APPROVED, DECLINED)
-- `POST /tickets/:id/ready` {photos[], note}
-- `GET /tickets/kanban` (NEW/IN_PROGRESS/READY grouped)
+### 3.2 WhatsApp Campaign
+1. Admin uploads an **opt-in** audience segment.  
+2. Worker sends messages via **throttled** queue (jitter, caps) respecting WABA limits & time zones; auto **opt-out** processing.  
+3. Dashboard displays campaign metrics; CSV export.
 
-### 6.3 POS/CRM
-- CRUD `customers`, `products`, `quotes`, `invoices`, `payments`
-- `POST /einvoice/submit/:invoiceId` → mode `portal|api`
-
-### 6.4 WhatsApp Bot
-- `POST /wa/send` {to, template|text}
-- `POST /wa/webhook` events (inbound msg, delivery, read)
-- `GET /wa/pairing-code` (opsional), `GET /wa/status`
+### 3.3 POS Sale
+1. Cashier adds items (barcode/QR), applies discounts, posts payment.  
+2. System updates inventory, prints receipt/label, and (if needed) issues **e-Invoice** via adapter.
 
 ---
 
-## 7) Compliance, Privacy & Security
+## 4) Data Model (Relational Schema, PostgreSQL)
 
-### 7.1 WhatsApp Policy & Messaging Limits
-- Wajib **opt-in** sebelum hantar mesej, simpan bukti opt-in & sediakan **opt-out** (“STOP”). Hormati **messaging limits** untuk menjaga reputasi. :contentReference[oaicite:24]{index=24} :contentReference[oaicite:25]{index=25}
+> Conventions: `id` = UUID, `created_at/updated_at` = TIMESTAMPTZ (UTC), `deleted_at` nullable (soft delete), FKs with `ON UPDATE CASCADE ON DELETE RESTRICT`.
 
-### 7.2 PDPA Malaysia
-- Paparkan T&C + Privacy Notice, jelaskan tujuan pemprosesan data, hak akses/pembetulan, dan retensi munasabah. Simpan persetujuan (timestamp, sumber). :contentReference[oaicite:26]{index=26} :contentReference[oaicite:27]{index=27}
+### 4.1 CRM & WhatsApp
+- **customers**  
+  `id, name, phone (unique), email, address, notes, created_at, updated_at, deleted_at`
+- **devices**  
+  `id, customer_id→customers.id, category, brand, model, serial_no, accessories, condition_in, created_at, updated_at, deleted_at`
+- **consents**  
+  `id, customer_id, channel ENUM('whatsapp'), opt_in_source, opt_in_at, opt_out_at, created_at`
+- **wa_threads**  
+  `id, customer_id, last_message_at, last_intent, state_json, created_at, updated_at`
+- **campaigns**  
+  `id, name, segment_query_json, template_id, status ENUM('DRAFT','SCHEDULED','SENDING','PAUSED','DONE'), created_at, updated_at`
+- **campaign_logs**  
+  `id, campaign_id, customer_id, phone, status ENUM('QUEUED','SENT','DELIVERED','READ','REPLIED','OPT_OUT','FAILED'), provider_msg_id, error, created_at`
 
-### 7.3 e-Invois LHDN
-- Ikuti **Guidelines** terkini & semak **SDK/API** MyInvois; simpan respon/ID rujukan & status validasi. :contentReference[oaicite:28]{index=28} :contentReference[oaicite:29]{index=29}
+### 4.2 Work Tickets (Service)
+- **intake_forms**  
+  `id, customer_snapshot_json, device_snapshot_json, problem_description, photos_json, tc_accepted BOOL, wa_opt_in BOOL, raw_json, created_at`
+- **work_tickets**  
+  `id, customer_id, device_id, intake_form_id, status ENUM('NEW','IN_PROGRESS','READY','CLOSED'), price_estimate NUMERIC(12,2), eta_ready_at TIMESTAMPTZ, priority ENUM('LOW','NORMAL','HIGH'), assignee_id (user), created_at, updated_at, closed_at`
+- **work_ticket_events**  
+  `id, ticket_id, type ENUM('CREATED','NOTE','PHOTO','ESTIMATE_SET','CUSTOMER_APPROVED','CUSTOMER_DECLINED','READY','PICKED_UP'), payload_json, actor ENUM('bot','tech','system','customer'), created_at`
 
-### 7.4 Aplikasi & Infrastruktur
-- JWT + RBAC; rate-limit endpoints kempen/WA; mask PII pada log.  
-- HTTPS (reverse proxy), rotasi API key, `CSP/Helmet`, audit trail menyeluruh.
+### 4.3 POS / Inventory / Billing
+- **products**  
+  `id, sku UNIQUE, name, description, price NUMERIC(12,2), cost NUMERIC(12,2), currency, stock_qty, min_stock_qty, barcode, images_json, created_at, updated_at, deleted_at`
+- **inventory_moves**  
+  `id, product_id, qty INT, reason ENUM('SALE','RETURN','ADJUST','INIT','REPAIR_PART'), ref_table, ref_id, created_at`
+- **invoices**  
+  `id, customer_id, ticket_id NULLABLE, number UNIQUE, status ENUM('DRAFT','ISSUED','PAID','VOID'), subtotal, tax, total, currency, due_at, posted_at, created_at, updated_at`
+- **invoice_items**  
+  `id, invoice_id, product_id NULLABLE, description, qty INT, unit_price NUMERIC(12,2), line_total NUMERIC(12,2)`
+- **quotes**  
+  `id, customer_id, ticket_id NULLABLE, number UNIQUE, status ENUM('DRAFT','SENT','ACCEPTED','REJECTED','EXPIRED'), totals…, created_at, updated_at`
+- **payments**  
+  `id, invoice_id, method ENUM('CASH','CARD','FPX','DuitNow','Bank'), amount NUMERIC(12,2), paid_at, txn_ref, created_at`
 
----
+### 4.4 Admin / Security / Audit
+- **users**  
+  `id, name, email UNIQUE, phone, role ENUM('admin','tech','cashier'), password_hash, last_login_at, created_at, updated_at`
+- **settings**  
+  `id, key UNIQUE, value_json, updated_at`
+- **audit_logs**  
+  `id, entity, entity_id, action, diff_json, actor_id NULLABLE, actor_type ENUM('user','system','bot'), created_at`
 
-## 8) Reliability, Observability, Operations
-- **Healthcheck** per servis (web/api/bot/db) dalam Compose untuk start-order & pemantauan. :contentReference[oaicite:30]{index=30}
-- **Logs** terstruktur (JSON) + korelasi request-id.  
-- **Metrics**: job sukses/gagal, queue depth, msg delivered/read/block, latency WA, error AI.  
-- **Alerts**: ETA terlepas, health bot disconnect, DB space low, failure e-Invois.
-
----
-
-## 9) Backup, Restore & Update
-
-### 9.1 Backup
-- Harian: `pg_dump` snapshot + retention; simpan di volume + NAS.  
-- Pertimbangkan strategi **continuous archiving/WAL** untuk RPO kecil. :contentReference[oaicite:31]{index=31} :contentReference[oaicite:32]{index=32}
-- Seed export (produk/setting) ke `json/csv` berkala.
-
-### 9.2 Restore
-- Prosedur pulih guna `psql` dari dump; uji DR secara berkala. :contentReference[oaicite:33]{index=33}
-
-### 9.3 Update & Rollback
-- Panel **Update**: pre-flight backup → pull/build images → rolling restart.  
-- Rollback: pilih tag image/git commit sebelumnya.
-
----
-
-## 10) Deployment Checklist
-- [ ] Docker Engine + Compose terpasang, ports 80/443 terbuka.  
-- [ ] `.env` terisi (DB/Redis/AI/WA/e-Invois).  
-- [ ] `docker compose up -d` green all; healthchecks OK.  
-- [ ] Pair **Baileys** (QR/pairing code); verifikasi `connection.update`. :contentReference[oaicite:34]{index=34}  
-- [ ] Prisma migrate/seed sukses. :contentReference[oaicite:35]{index=35}  
-- [ ] HTTPS reverse proxy aktif.  
-- [ ] Privacy Notice/PDPA + opt-in/opt-out mekanisme siap. :contentReference[oaicite:36]{index=36} :contentReference[oaicite:37]{index=37}  
-- [ ] e-Invois adapter diuji (MODE `portal` terlebih dahulu). :contentReference[oaicite:38]{index=38}
-
----
-
-## 11) Risk & Mitigation
-- **WA session reset/ban** → ketat opt-in, throttle, pemanasan nombor, monitor delivery ratio; failover notifikasi via SMS/Email. :contentReference[oaicite:39]{index=39} :contentReference[oaicite:40]{index=40}  
-- **Breaking changes Baileys** → pin versi, changelog watch, test matrix. :contentReference[oaicite:41]{index=41}  
-- **Data loss** → backup berkala + DR drill; gunakan volume bernama. :contentReference[oaicite:42]{index=42}  
-- **Ketergantungan AI** → fallback template non-AI apabila API gagal. :contentReference[oaicite:43]{index=43}
+**Indexes (examples):**
+- `customers(phone)`, `work_tickets(status, created_at)`, `campaign_logs(campaign_id, status)`, full-text GIN on `work_ticket_events.payload_json->>'note'`.
 
 ---
 
-## 12) References
-- Baileys MD (Connecting; QR/Pairing) — docs & repo. :contentReference[oaicite:44]{index=44} :contentReference[oaicite:45]{index=45}  
-- WhatsApp Business Policy & Opt-in; Messaging Limits. :contentReference[oaicite:46]{index=46} :contentReference[oaicite:47]{index=47} :contentReference[oaicite:48]{index=48}  
-- OpenAI **Responses API** + Node SDK. :contentReference[oaicite:49]{index=49} :contentReference[oaicite:50]{index=50}  
-- LHDN e-Invois Guidelines & MyInvois API. :contentReference[oaicite:51]{index=51} :contentReference[oaicite:52]{index=52} :contentReference[oaicite:53]{index=53}  
-- PDPA Malaysia (PDP Dept & ringkasan undang-undang). :contentReference[oaicite:54]{index=54} :contentReference[oaicite:55]{index=55}  
-- Docker Compose Spec & Services; Healthchecks. :contentReference[oaicite:56]{index=56} :contentReference[oaicite:57]{index=57} :contentReference[oaicite:58]{index=58}  
-- PostgreSQL Backup (`pg_dump`, strategi). :contentReference[oaicite:59]{index=59} :contentReference[oaicite:60]{index=60} :contentReference[oaicite:61]{index=61}  
-- Prisma Migrate (migrations & workflow). :contentReference[oaicite:62]{index=62} :contentReference[oaicite:63]{index=63}
+## 5) API (Must-Have Endpoints)
+
+### 5.1 Authentication & Settings
+- `POST /auth/login` → JWT; RBAC by role
+- `GET/PUT /settings` (admin only)
+
+### 5.2 CRM & Tickets
+- `POST /intake` (from web form) → create/merge customer+device → create ticket `NEW`
+- `GET /tickets/kanban` → grouped by status
+- `PATCH /tickets/:id/estimate` → `{ price_estimate, eta_ready_at }` → event `ESTIMATE_SET`
+- `POST /tickets/:id/ready` → `{ photos[], note }` → event `READY`
+- `POST /tickets/:id/approve|decline` (customer action)
+- `POST /tickets/:id/pickup` → event `PICKED_UP` + close ticket
+
+### 5.3 POS
+- `CRUD /products`
+- `POST /invoices` (+ items) → `POST /payments`
+- `GET /reports/sales?period=today|7d|30d`
+
+### 5.4 Campaigns
+- `POST /campaigns` (create), `POST /campaigns/:id/schedule|pause|resume|stop`
+- Upload/import recipients (server filters only **opt-in** contacts)
+- Metrics endpoints (`/campaigns/:id/metrics`)
+
+### 5.5 AI Replies
+- `POST /ai/reply` → { thread, question, customer_id? } → grounded answer or fallback (low-temperature). [Source]
+
+---
+
+## 6) Compliance & Policy (Critical)
+
+- **WhatsApp Opt-In**: must clearly state business name and that customer agrees to receive messages; store timestamp and source of consent. [Official Opt-In Policy — Source]
+- **WhatsApp Business Terms**: ensure lawful processing and required permissions; respect data rights. [Source]
+- **Messaging Limits**: adhere to WABA messaging limits and note **upcoming changes (from Oct 7, 2025)** which may alter limit calculation; build throttling/jitter + warm-up. [Sources]
+- **Content & Templates**: keep messages concise, useful, non-spammy; always provide **opt-out** (“Reply STOP”). 
+- **Malaysia e-Invoice**: follow **Guidelines/Specific Guideline** versions and MyInvois APIs/Portal behaviour (e.g., last-31-days search window). Keep adapter up-to-date with versioned mappings. [Sources]
+
+---
+
+## 7) Non-Functional Requirements
+
+### 7.1 Reliability & Observability
+- Health checks for all containers; readiness probes.
+- Centralized logging (`api`, `wa-bot`, `worker`) with correlation IDs & minimal PII.
+- Metrics: queue depth, message send rates, ticket SLA breaches, campaign success ratios.
+
+### 7.2 Security
+- JWT with RBAC; strong password policy; account lockout.
+- Secrets in env/secret manager; never store OpenAI keys or Baileys creds in git.
+- TLS termination at `nginx`; HSTS; secure cookies; CSRF for web forms.
+- PII minimization in logs; consent + opt-out honored within 60s.
+
+### 7.3 Data & Backup
+- PostgreSQL: daily `pg_dump` + retention policy; tested restore procedure.
+- Versioned migrations (Prisma or equivalent) with zero-downtime plan.
+- Volumes: named volumes for `postgres` and persistent Baileys auth state.
+
+### 7.4 Performance
+- Redis-based rate-limiters (token bucket) for campaigns & WA bot sends.
+- Caching: hot paths (customer by phone, ticket by id) with short TTL.
+
+### 7.5 Upgrades & Rollback
+- Update Panel: backup → image tag switch → rolling restart.
+- Rollback to previous tag on failure; DB migrations backward-compatible when possible.
+
+---
+
+## 8) Operational Runbook (Essentials)
+
+1. **Bootstrap (fresh server)**  
+   - Install Docker Engine + Compose; clone repo; `cp .env.example .env`; fill secrets (OpenAI, DB); `docker compose up -d`.  
+   - Prisma migrations: `prisma migrate deploy` (or `db push` for dev).
+
+2. **Pair WhatsApp**  
+   - `docker compose logs -f wa-bot`; scan **QR** (or pairing code) with WhatsApp **Linked devices**; persist session folder. [Baileys Connecting — Source]
+
+3. **Smoke Tests**  
+   - `GET /api/health`, dashboard loads, ticket creation from Intake Form works, bot ACK is received.
+
+4. **Backups**  
+   - Daily cron (host or scheduler container) to run `pg_dump` → gzip → rotate.
+
+5. **Monitoring**  
+   - Set alerts on: queue backlog, failed sends, bot disconnects, error rate > 1%, ticket ETA breaches.
+
+---
+
+## 9) Acceptance Criteria (System-Level)
+
+- Full **Ticket 3-stage** flow works E2E (QR intake → NEW → IN_PROGRESS (estimate/ETA) → READY (photos) → invoice → pickup & close).
+- Bot produces **grounded answers** when data exists; uses **fallback** when not. [OpenAI Responses API — Source]
+- Campaigns enforce **opt-in**, implement throttling/jitter, and reflect **messaging limits**. [Sources]
+- e-Invoice adapter exports Portal-compatible files and exposes API stubs aligned with the latest guideline. [Sources]
+- Backups restore cleanly to a new database; Update Panel can roll forward/back with minimal downtime.
+
+---
+
+## 10) References
+
+- **Baileys (WhiskeySockets)** — npm page (MD client, QR/Pairing) & GitHub (breaking changes). [turn0search0], [turn0search10], [turn0search5], [turn0search20], [turn0search15]
+- **OpenAI** — Responses API reference & migration guidance; official JS/TS SDK. [turn0search1], [turn0search6], [turn0search16], [turn0search21], [turn0search11]
+- **WhatsApp Policies** — Opt-In/Business Policy/Terms; Messaging Limits & upcoming changes. [turn0search7], [turn0search12], [turn0search22], [turn0search3], [turn0search8]
+- **MyInvois (IRBM/LHDN)** — e-Invoice guidelines & APIs; MyInvois Portal. [turn0search14], [turn0search19], [turn0search4], [turn0search9], [turn0search23]
